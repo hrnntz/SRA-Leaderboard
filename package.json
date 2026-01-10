@@ -1,0 +1,10 @@
+{
+  "name": "sra-leaderboard",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "express": "^5.2.1",
+    "node-insim": "^3.0.0",
+    "ws": "^8.16.0"
+  }
+}
