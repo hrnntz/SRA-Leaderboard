@@ -1,34 +1,38 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>SRA Leaderboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
   <!-- Font -->
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;800;900&display=swap" rel="stylesheet">
 
   <!-- Styles -->
-  <link rel="stylesheet" href="style.css" /
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-
   <div id="overlay">
 
-    <!-- HEADER -->
-    <div id="header">
-      <h1>RACE LEADERBOARD</h1>
-      <div id="lap">LAP 0 / 0</div>
-    </div>
+    <!-- TOP CENTER: Lap pill -->
+    <div id="lap-pill" aria-live="polite">LAP 0 / 0</div>
 
-    <!-- LEADERBOARD TABLE -->
-    <div id="board">
+    <!-- LEFT: Leaderboard -->
+    <aside id="board" role="list" aria-label="Leaderboard">
       <!-- rows injected by app.js -->
+    </aside>
+
+    <!-- BOTTOM-RIGHT: Selected driver box -->
+    <div id="focus-panel" aria-live="polite">
+      <div id="focus-pos">-</div>
+      <div id="focus-right">
+        <div id="focus-name">NO DRIVER</div>
+        <div id="focus-gap">GAP TO P1 -</div>
+      </div>
     </div>
 
   </div>
 
-  <!-- SCRIPT -->
   <script src="app.js"></script>
 </body>
 </html>

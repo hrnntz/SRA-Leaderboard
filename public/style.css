@@ -1,170 +1,313 @@
-/* base */
+/* Reset / base */
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html,body { height: 100%; }
+html, body { height: 100%; width: 100%; }
 body {
   font-family: "Montserrat", "Segoe UI", Roboto, Arial, sans-serif;
-  background: #3a3a3a;
+  background: transparent; /* set to transparent for OBS; use a dark color for dev if you prefer */
   color: #fff;
-  padding: 28px;
+  overflow: hidden; /* Prevent scrollbars from the overlay */
 }
 
-/* container */
+/* Full-screen overlay container */
 #overlay {
-  width: 820px;
-  margin: 0 auto;
+  position: fixed;
+  inset: 0; /* top:0; right:0; bottom:0; left:0 */
+  pointer-events: none; /* allow clicks to pass through unless explicitly enabled on interactive elements */
 }
 
-/* header */
-#header {
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  margin-bottom: 18px;
+/* LAP PILL - top center */
+#lap-pill {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto; /* allow interaction if needed */
+  background: rgba(6,6,6,0.85);
+  color: #fff;
+  font-weight: 900;
+  padding: 8px 18px;
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  z-index: 40;
+  font-size: 15px;
 }
-#header h1 { font-size: 18px; font-weight:800; letter-spacing:1px; }
-#lap { font-weight:800; }
 
-/* board */
+/* BOARD - fixed left column */
 #board {
-  display:flex;
-  flex-direction:column;
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  width: 240px;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+  z-index: 30;
+  pointer-events: auto; /* make rows clickable */
 }
 
 /* row layout */
 .row {
-  display:grid;
-  grid-template-columns: 80px 12px 1fr 180px;
-  align-items:center;
-  height: 64px;
+  display: grid;
+  grid-template-columns: 46px 8px 1fr;
+  align-items: center;
+  height: 44px;
   border-radius: 6px;
-  overflow:hidden;
-  background: linear-gradient(90deg,#0f0f0f,#1a1a1a);
-  box-shadow: 0 6px 18px rgba(0,0,0,0.6);
-  transition: all 0.3s ease;
+  overflow: hidden;
+  background: rgba(8,8,8,0.85);
+  box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+  transition: transform .12s ease, box-shadow .12s ease, outline .12s;
   position: relative;
+  cursor: pointer;
+  padding-right: 6px;
+}
+.row:hover { transform: translateY(-2px); box-shadow: 0 12px 36px rgba(0,0,0,0.6); }
+.row.selected {
+  outline: 2px solid rgba(0,200,255,0.16);
+  box-shadow: 0 16px 48px rgba(0,200,255,0.08);
+  transform: translateY(-2px);
 }
 
-.row.position-changed {
-  animation: positionChange 0.6s ease-out;
-}
-
-@keyframes positionChange {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.03); box-shadow: 0 8px 24px rgba(255,255,255,0.15); }
-  100% { transform: scale(1); }
-}
-
-/* pos box */
+/* pos */
 .pos {
   display:flex;
   align-items:center;
   justify-content:center;
   height:100%;
-  background:#000;
-  color:#fff;
+  width:46px;
+  background:#060606;
   font-weight:900;
-  font-size:30px;
+  font-size:18px;
+  color:#fff;
 }
 
-/* colored left bar */
+/* colorbar */
 .colorbar {
-  width:12px;
-  height:48px;
-  border-radius:6px;
+  width:8px;
+  height:28px;
+  border-radius:4px;
   margin-left:6px;
-  box-shadow: 0 3px 8px rgba(0,0,0,0.45);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
 }
 
 /* name */
 .name {
-  padding-left:18px;
-  font-size:22px;
+  padding-left:10px;
+  font-size:13px;
   font-weight:800;
+  color:#e6eef6;
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
 }
 
 /* right area */
-.right { text-align:right; padding-right:18px; }
-.gap { font-size:22px; font-weight:900; }
-.laptime { font-size:13px; opacity:0.9; margin-top:4px; }
-
-/* arrows (live only) */
-.arrow { 
-  position:absolute; 
-  left:-42px; 
-  top:50%;
-  transform: translateY(-50%);
-  width:30px; 
-  height:30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: arrowPulse 0.6s ease-out;
+.right {
+  justify-self:end;
+  text-align:right;
 }
-.arrow.up::before { 
-  content:"▲"; 
-  color:#00e676; 
-  font-size:26px;
-  text-shadow: 0 2px 8px rgba(0,230,118,0.5);
-}
-.arrow.down::before { 
-  content:"▼"; 
-  color:#ff3b30; 
-  font-size:26px;
-  text-shadow: 0 2px 8px rgba(255,59,48,0.5);
+.gap {
+  font-size:12px;
+  font-weight:800;
+  color:#bfcbd6;
 }
 
-@keyframes arrowPulse {
-  0% { opacity: 0; transform: translateY(-50%) scale(0.5); }
-  50% { opacity: 1; transform: translateY(-50%) scale(1.2); }
-  100% { opacity: 1; transform: translateY(-50%) scale(1); }
-}
-
-/* podium styling (appear when race finished) */
-.row.podium-gold { 
-  border-left: 12px solid #ffd600; 
-  background: linear-gradient(90deg, rgba(255,214,0,0.12), rgba(255,255,255,0.02)); 
-}
-.row.podium-silver { 
-  border-left: 12px solid #c0c0c0; 
-  background: linear-gradient(90deg, rgba(192,192,192,0.08), rgba(255,255,255,0.02)); 
-}
-.row.podium-bronze { 
-  border-left: 12px solid #cd7f32; 
-  background: linear-gradient(90deg, rgba(205,127,50,0.08), rgba(255,255,255,0.02)); 
-}
-
-/* big final winner highlight */
-.row.podium-gold .pos { font-size:34px; }
-.row.podium-gold { 
-  box-shadow: 0 12px 40px rgba(255,214,0,0.15);
-  transform: scale(1.02);
-}
-
-/* lapped indicator */
+/* lapped badge */
 .lapped-badge {
-  display: inline-block;
-  background: rgba(255, 59, 48, 0.2);
+  display:inline-block;
+  background: rgba(255, 59, 48, 0.12);
   border: 1px solid #ff3b30;
   color: #ff3b30;
-  padding: 2px 8px;
+  padding: 2px 6px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   margin-left: 8px;
   vertical-align: middle;
 }
 
-/* responsive tweaks */
-@media (max-width:900px) {
-  #overlay { width: calc(100% - 40px); }
-  .row { grid-template-columns: 64px 10px 1fr 140px; height:56px; }
-  .pos { font-size:24px; }
-  .name { font-size:18px }
-  .gap { font-size:18px }
-  .laptime { font-size:12px }
-  .arrow { left: -36px; }
+/* FOCUS PANEL - bottom-right */
+#focus-panel {
+  position: absolute;
+  right: 28px;
+  bottom: 28px;
+  pointer-events: auto;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(6,6,6,0.95);
+  padding: 14px 18px;
+  border-radius: 6px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  min-width: 320px;
 }
+
+/* big pos box */
+#focus-pos {
+  background: #060606;
+  width: 64px;
+  height: 56px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-size:36px;
+  font-weight:900;
+  border-radius:6px;
+  color:#fff;
+}
+
+/* right side of focus */
+#focus-right { display:flex; flex-direction:column; gap:6px; }
+#focus-name { font-size:18px; font-weight:900; color:#dfeefc; }
+#focus-gap { font-size:12px; font-weight:800; color:#c6d3db; }
+
+/* small screens adjustments */
+@media (max-width: 900px) {
+  #board { width: 200px; left: 12px; top: 12px; gap: 8px; }
+  .row { height: 40px; grid-template-columns: 40px 8px 1fr; }
+  .pos { font-size:16px; width:40px; }
+  #lap-pill { top: 12px; padding:6px 12px; font-size:13px; }
+  #focus-panel { right: 12px; bottom: 12px; min-width: 260px; padding:10px 12px; }
+  #focus-pos { width:52px; height:44px; font-size:30px; }
+  #focus-name { font-size:16px; }
+}
+
+/* ------------------------------------------------------------------
+   Additional broadcast-style blocks & large-format leaderboard/focus
+   (these were added earlier to match the reference UI; they are safe
+   to keep alongside the small overlay rules above)
+   ------------------------------------------------------------------ */
+
+/* large-style leaderboard container (optional) */
+#leaderboard {
+  position: absolute;
+  top: 40px;
+  left: 40px;
+  width: 720px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  z-index: 35;
+}
+
+/* wide leaderboard row used for broadcast layout (alternate to .row) */
+.lb-row {
+  display: grid;
+  grid-template-columns: 70px 1fr 180px;
+  height: 64px;
+  background: linear-gradient(90deg, #000, #1a1a1a);
+  margin-bottom: 6px;
+  cursor: pointer;
+  align-items: center;
+}
+.lb-row.selected { outline: 3px solid rgba(0,180,255,0.5); box-shadow: 0 12px 36px rgba(0,0,0,0.6); transform: translateY(-2px); }
+
+.lb-pos {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 34px;
+  font-weight: 900;
+  background: black;
+  color: white;
+}
+.lb-name {
+  display: flex;
+  align-items: center;
+  padding-left: 24px;
+  font-size: 26px;
+  font-weight: 800;
+  color: #e6eef6;
+}
+.lb-gap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  font-weight: 900;
+  color: #ffffff;
+}
+
+/* position highlight colours (broadcast) */
+.pos-purple { background:#9c27b0; color: white; }
+.pos-red    { background:#e53935; color: white; }
+.pos-green  { background:#1fd14a; color: white; }
+
+/* center info (clock + lap) for broadcast layout */
+#center-info {
+  position: absolute;
+  top: 260px;
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none;
+  z-index: 34;
+}
+#race-time,
+#lap-info {
+  background: black;
+  color: white;
+  padding: 12px 30px;
+  font-size: 34px;
+  font-weight: 900;
+  margin-bottom: 12px;
+  display: inline-block;
+}
+
+/* alternate focus bar (wide) */
+#focus-bar {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: 80px 520px 120px;
+  height: 80px;
+  background: black;
+  color: white;
+  z-index: 36;
+  pointer-events: auto;
+}
+#focus-bar .focus-pos {
+  background: white;
+  color: black;
+  font-size: 46px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#focus-bar .focus-main {
+  padding: 10px 18px;
+}
+#focus-bar .focus-name {
+  font-size: 30px;
+  font-weight: 900;
+}
+#focus-bar .focus-sub {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 16px;
+  opacity: 0.9;
+}
+#focus-bar .focus-tag {
+  background: white;
+  color: black;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+#focus-bar .focus-tag-num { font-size: 34px; font-weight: 900; }
+#focus-bar .tag-label { font-size: 12px; font-weight: 800; }
+
+/* small responsive tweaks for broadcast blocks */
+@media (max-width: 900px) {
+  #leaderboard { left: 12px; top: 12px; width: calc(100% - 24px); }
+  .lb-row { grid-template-columns: 64px 1fr 140px; height: 56px; }
+  #center-info { top: 200px; }
+  #focus-bar { grid-template-columns: 64px 1fr 88px; height: 64px; bottom: 12px; left: 50%; transform: translateX(-50%); }
+}
+
+/* end of file */

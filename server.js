@@ -4,7 +4,8 @@
  * - Active, throttled name-resolve (IS_TINY TINY_NPL) only when placeholders exist
  * - Dedupe AI/PLID shadows
  * - Detect race finish by lap count and snapshot final results
- * - Broadcasts payload including: leaderboard, totalLaps, lap, fastest, raceFinished, finalResults
+ * - Broadcasts payload including: leaderboard, totalLaps, lapText, fastest, raceFinished, finalResults
+ * - Accepts client "focus" (click) and sends IS_SCC to LFS to change camera ViewPLID
  */
 
 import express from 'express';
@@ -15,7 +16,7 @@ const { InSim } = nodeInsimPkg;
 
 (async () => {
   const packets = await import('node-insim/packets');
-  const { PacketType, InSimFlags, IS_TINY, TinyType } = packets;
+  const { PacketType, InSimFlags, IS_TINY, TinyType, IS_SCC } = packets;
 
   /* CONFIG */
   const HTTP_PORT = 3000;
@@ -26,53 +27,35 @@ const { InSim } = nodeInsimPkg;
   const LOG_THROTTLE_MS = 10000;
   const STALE_DRIVER_MS = 30_000;
   const NAME_UPDATE_GRACE_MS = 2_000;
+  const UI_UPDATE_MS = 250;
 
-  /* HTTP + static */
+  /* EXPRESS */
   const app = express();
+  app.use(express.json());
   app.use(express.static('public'));
+
   let lastPayload = null;
   app.get('/api/leaderboard', (req, res) => res.json(lastPayload || { info: 'no data yet' }));
+
+  // Optional POST camera endpoint (alternate to websocket focus)
+  app.post('/camera', (req, res) => {
+    const plid = Number(req.body?.plid || 0);
+    if (!Number.isFinite(plid)) return res.status(400).json({ ok: false, error: 'invalid plid' });
+    try {
+      if (!inSim) throw new Error('InSim not initialized');
+      inSim.send(new IS_SCC({ ViewPLID: plid }));
+      console.log(`🎯 [HTTP] Sent IS_SCC -> ViewPLID ${plid}`);
+      return res.json({ ok: true });
+    } catch (err) {
+      console.warn('Failed to send IS_SCC (HTTP):', err?.message ?? err);
+      return res.status(500).json({ ok: false, error: String(err) });
+    }
+  });
 
   const server = http.createServer(app);
   server.listen(HTTP_PORT, () => console.log(`🌐 Overlay: http://localhost:${HTTP_PORT}`));
 
-  /* WebSocket */
-  const wss = new WebSocketServer({ server });
-  const clientFocus = new Map(); // Track which PLID each client is focused on
-  
-  wss.on('connection', ws => {
-    if (lastPayload) ws.send(JSON.stringify(lastPayload));
-    ws.send(JSON.stringify({ info: 'welcome' }));
-    
-    // Handle focus selection from client
-    ws.on('message', msg => {
-      try {
-        const data = JSON.parse(msg.toString());
-        if (data.type === 'focus') {
-          clientFocus.set(ws, data.plid);
-          console.log(`👁️ Client focused on PLID ${data.plid}`);
-        }
-      } catch (e) {
-        console.warn('Invalid message from client:', e);
-      }
-    });
-    
-    ws.on('close', () => clientFocus.delete(ws));
-  });
-  
-  function broadcast(obj) {
-    lastPayload = obj;
-    const json = JSON.stringify(obj);
-    for (const c of wss.clients) {
-      if (c.readyState === 1) {
-        const focusedPLID = clientFocus.get(c);
-        const payload = focusedPLID ? { ...obj, focusedPLID } : obj;
-        c.send(JSON.stringify(payload));
-      }
-    }
-  }
-
-  /* InSim */
+  /* InSim - create before websocket so handlers can use it */
   const inSim = new InSim();
   console.log('🔎 Connecting to LFS InSim...');
   inSim.connect({
@@ -84,16 +67,63 @@ const { InSim } = nodeInsimPkg;
     InSimVer: 9,
   });
 
-  /* State */
+  /* WEBSOCKET */
+  const wss = new WebSocketServer({ server });
+  const clientFocus = new Map(); // ws -> plid
+
+  wss.on('connection', ws => {
+    if (lastPayload) ws.send(JSON.stringify(lastPayload));
+    ws.send(JSON.stringify({ info: 'welcome' }));
+
+    ws.on('message', msg => {
+      try {
+        const data = JSON.parse(msg.toString());
+        if (data?.type === 'focus') {
+          const plid = Number(data.plid) || 0;
+          clientFocus.set(ws, plid);
+          console.log(`👁️ Client focused on PLID ${plid}`);
+
+          // Send IS_SCC to InSim
+          try {
+            inSim.send(new IS_SCC({ ViewPLID: plid }));
+            console.log(`🎯 Sent IS_SCC -> ViewPLID ${plid}`);
+          } catch (err) {
+            console.warn('Failed to send IS_SCC (WS):', err?.message ?? err);
+          }
+        }
+      } catch (e) {
+        console.warn('Invalid message from client:', e);
+      }
+    });
+
+    ws.on('close', () => clientFocus.delete(ws));
+  });
+
+  function broadcast(obj) {
+    lastPayload = obj;
+    const json = JSON.stringify(obj);
+    for (const c of wss.clients) {
+      if (c.readyState === 1) {
+        // include individual focused plid if any
+        const focusedPLID = clientFocus.get(c);
+        const payload = focusedPLID ? { ...obj, focusedPLID } : obj;
+        try { c.send(JSON.stringify(payload)); } catch (_) {}
+      }
+    }
+  }
+
+  /* STATE */
   const drivers = new Map();
   let totalLaps = 0;
   let raceFinished = false;
   let finalResults = null;
   let lastBroadcast = 0;
-  const UI_UPDATE_MS = 250;
+  let lastLogTime = 0;
+  let lastLeaderPlid = null;
   let raceStartTime = null;
+  let sessionType = 'race';
 
-  /* Helpers */
+  /* HELPERS */
   const safeStr = v => (v === undefined || v === null ? '' : String(v));
   const CARET_COLOR_MAP = {
     '0': '#000000','1': '#ff3333','2': '#33ff66','3': '#ffd633',
@@ -142,7 +172,6 @@ const { InSim } = nodeInsimPkg;
     raceFinished = false;
     finalResults = null;
     raceStartTime = null;
-
     for (const d of drivers.values()) {
       d.laps = 0;
       d.node = 0;
@@ -151,54 +180,47 @@ const { InSim } = nodeInsimPkg;
       d.totalTime = null;
       d.fastestLapMs = null;
       d.finishTime = null;
+      d.lastSeen = Date.now();
     }
-
     console.log(`🔁 Race state reset ${reason ? `(${reason})` : ''}`);
   }
-  
 
-  /* Packet handlers */
+  /* PACKET HANDLERS */
   inSim.on(PacketType.ISP_VER, pkt => console.log(`✅ ISP_VER: ${pkt.Product} ${pkt.Version}`));
 
   inSim.on(PacketType.ISP_RACE, pkt => {
     totalLaps = pkt.RaceLaps ?? pkt.TotalLaps ?? totalLaps;
+    sessionType = totalLaps > 0 ? 'race' : 'qualy';
     if (totalLaps) console.log(`🏁 Race configured: totalLaps = ${totalLaps}`);
   });
-  inSim.on(PacketType.ISP_STA, pkt => totalLaps = pkt.RaceLaps ?? pkt.TotalLaps ?? totalLaps);
+  inSim.on(PacketType.ISP_STA, pkt => {
+    totalLaps = pkt.RaceLaps ?? pkt.TotalLaps ?? totalLaps;
+    sessionType = totalLaps > 0 ? 'race' : 'qualy';
+    resetRaceState('ISP_STA');
+  });
 
-  // IS_LAP - LAP time packet (authoritative lap completion event)
   inSim.on(PacketType.ISP_LAP, pkt => {
     const plid = pkt.PLID;
     const lapsDone = pkt.LapsDone ?? 0;
     if (drivers.has(plid)) {
       const d = drivers.get(plid);
       d.laps = lapsDone;
-      
-      // Start race timer on first lap
-      if (lapsDone === 1 && !raceStartTime) {
-        raceStartTime = Date.now();
-      }
-      
-      // 🏁 FREEZE TIME on race finish (when driver completes all laps)
+      if (lapsDone === 1 && !raceStartTime) raceStartTime = Date.now();
       if (totalLaps > 0 && lapsDone >= totalLaps) {
         if (!d.finishTime) {
           d.finishTime = d.totalTime ?? pkt.ETime ?? 0;
           console.log(`🏁 FINISH: ${d.name} completed race at position ${d.position} - Final Time: ${(d.finishTime / 1000).toFixed(2)}s`);
         }
       } else {
-        console.log(`🏁 LAP: ${d.name} completed lap ${lapsDone} - LTime: ${(pkt.LTime / 1000).toFixed(2)}s`);
+        // console.log(`🏁 LAP: ${d.name} completed lap ${lapsDone} - LTime: ${(pkt.LTime / 1000).toFixed(2)}s`);
       }
-      
-      // Update fastest lap
       if (pkt.LTime && pkt.LTime > 0) {
-        if (d.fastestLapMs === null || pkt.LTime < d.fastestLapMs) {
-          d.fastestLapMs = pkt.LTime;
-        }
+        if (d.fastestLapMs === null || pkt.LTime < d.fastestLapMs) d.fastestLapMs = pkt.LTime;
       }
+      d.lastSeen = Date.now();
     }
   });
 
-  // NPL authoritative name mapping
   inSim.on(PacketType.ISP_NPL, pkt => {
     const plid = pkt.PLID;
     const raw = extractNameFromPacket(pkt) || `PLID ${plid}`;
@@ -210,13 +232,13 @@ const { InSim } = nodeInsimPkg;
     };
     entry.rawName = raw; entry.color = color; entry.name = name; entry.nameTs = Date.now();
     drivers.set(plid, entry);
-    console.log(`👤 NPL: ${name} (PLID ${plid})`);
+    // console.log(`👤 NPL: ${name} (PLID ${plid})`);
   });
 
   inSim.on(PacketType.ISP_PLL, pkt => {
     const plid = pkt.PLID;
     if (drivers.has(plid)) {
-      console.log(`👋 PLL: ${drivers.get(plid).name} (PLID ${plid})`);
+      // console.log(`👋 PLL: ${drivers.get(plid).name} (PLID ${plid})`);
       drivers.delete(plid);
     }
   });
@@ -228,25 +250,24 @@ const { InSim } = nodeInsimPkg;
 
   inSim.on(PacketType.ISP_REO, pkt => {
     raceFinished = true;
-    finalResults = pkt.PLID.map((plid, index) => {
+    finalResults = pkt.PLID.map((plid,index) => {
       const d = drivers.get(plid);
       return d ? {
-        position: index + 1,
+        position: index+1,
         plid: d.plid,
         name: d.name,
         timeMs: d.finishTime ?? d.totalTime ?? null,
         fastestLapMs: d.fastestLapMs ?? null
       } : null;
     }).filter(Boolean);
+    finalResults.sort((a,b)=> (a.position||9999)-(b.position||9999));
     console.log('🏁 ISP_REO received — race officially finished');
   });
 
-  /* MCI updates */
-  let lastLogTime = 0, lastLeaderPlid = null;
+  /* MCI handler */
   inSim.on(PacketType.ISP_MCI, packet => {
-    if (!packet.Info || !Array.isArray(packet.Info) || packet.Info.length === 0) return;
+    if (!packet.Info?.length) return;
 
-    // update / create (STABLE MCI HANDLING)
     for (const car of packet.Info) {
       const plid = car.PLID;
       const rawFromCar = extractNameFromPacket(car);
@@ -255,7 +276,7 @@ const { InSim } = nodeInsimPkg;
       const node = typeof car.Node === 'number' ? car.Node : 0;
       const position = typeof car.Position === 'number' ? car.Position : 99;
       const totalTime = typeof car.TotalTime === 'number' ? car.TotalTime : null;
-      
+
       if (!drivers.has(plid)) {
         const raw = rawFromCar || `PLID ${plid}`;
         drivers.set(plid, {
@@ -275,10 +296,9 @@ const { InSim } = nodeInsimPkg;
         });
         continue;
       }
-      
+
       const d = drivers.get(plid);
-      
-      // ✅ NAME UPDATE (authoritative only if real)
+
       if (rawFromCar && !isPlaceholderName(rawFromCar)) {
         if (isPlaceholderName(d.name) || Date.now() - d.nameTs > NAME_UPDATE_GRACE_MS) {
           d.rawName = rawFromCar;
@@ -287,39 +307,32 @@ const { InSim } = nodeInsimPkg;
           d.nameTs = Date.now();
         }
       }
-      
-      // ✅ LAP TRACKING: Use MCI Lap field as fallback
-      if (currentLap > d.laps) {
-        d.laps = currentLap;
-      }
-      
-      // ✅ NODE UPDATE
+
+      if (currentLap > d.laps) d.laps = currentLap;
       d.node = node;
-      
-      // ✅ POSITION IS ONLY A HINT
       d.position = position;
-      
-      // ✅ TOTAL TIME: Stop updating if driver has finished
       if (d.finishTime === null) {
-        if (totalTime !== null && (d.totalTime === null || totalTime >= d.totalTime)) {
-          d.totalTime = totalTime;
-        }
+        if (totalTime !== null && (d.totalTime === null || totalTime >= d.totalTime)) d.totalTime = totalTime;
       }
-      
       d.prevNode = car.Node;
       d.lastSeen = Date.now();
     }
 
     totalLaps = packet.TotalLaps ?? packet.RaceLaps ?? totalLaps;
 
-    // remove stale drivers
+    // cleanup stale
     const now = Date.now();
     for (const [plid,d] of drivers) {
       if (now - d.lastSeen > STALE_DRIVER_MS) drivers.delete(plid);
     }
 
-    // build sorted list
-    const tempList = Array.from(drivers.values()).sort((a, b) => {
+    // sort (session aware)
+    const tempList = Array.from(drivers.values()).sort((a,b) => {
+      if (sessionType === 'qualy') {
+        const aTime = a.fastestLapMs == null ? Infinity : a.fastestLapMs;
+        const bTime = b.fastestLapMs == null ? Infinity : b.fastestLapMs;
+        return aTime - bTime;
+      }
       if ((a.laps ?? 0) !== (b.laps ?? 0)) return (b.laps ?? 0) - (a.laps ?? 0);
       if ((a.node ?? 0) !== (b.node ?? 0)) return (b.node ?? 0) - (a.node ?? 0);
       const ap = typeof a.position === 'number' ? a.position : 9999;
@@ -327,7 +340,7 @@ const { InSim } = nodeInsimPkg;
       return ap - bp;
     });
 
-    // dedupe by position+node
+    // dedupe by pos+node
     const groupedByPosNode = new Map();
     for (const d of tempList) {
       const pos = typeof d.position === 'number' ? d.position : 9999;
@@ -342,11 +355,11 @@ const { InSim } = nodeInsimPkg;
       }
     }
 
-    const cleanedList = Array.from(groupedByPosNode.values()).sort((a,b)=>{
+    const cleanedList = Array.from(groupedByPosNode.values()).sort((a,b) => {
       const ap = typeof a.position === 'number' ? a.position : 9999;
       const bp = typeof b.position === 'number' ? b.position : 9999;
-      if (ap !== bp) return ap-bp;
-      return (a.name||'').localeCompare(b.name||'');
+      if (ap !== bp) return ap - bp;
+      return (a.name || '').localeCompare(b.name || '');
     });
 
     // dedupe by normalized name
@@ -360,26 +373,34 @@ const { InSim } = nodeInsimPkg;
       }
     }
 
-    const finalList = Array.from(nameMap.values()).sort((a,b)=>{
+    const finalList = Array.from(nameMap.values()).sort((a,b) => {
+      if (sessionType === 'qualy') {
+        const aTime = a.fastestLapMs == null ? Infinity : a.fastestLapMs;
+        const bTime = b.fastestLapMs == null ? Infinity : b.fastestLapMs;
+        if (aTime !== bTime) return aTime - bTime;
+      } else {
+        if ((a.laps ?? 0) !== (b.laps ?? 0)) return (b.laps ?? 0) - (a.laps ?? 0);
+        if ((a.node ?? 0) !== (b.node ?? 0)) return (b.node ?? 0) - (a.node ?? 0);
+      }
       const ap = typeof a.position === 'number' ? a.position : 9999;
       const bp = typeof b.position === 'number' ? b.position : 9999;
-      if (ap !== bp) return ap-bp;
-      return (a.name||'').localeCompare(b.name||'');
+      if (ap !== bp) return ap - bp;
+      return (a.name || '').localeCompare(b.name || '');
     });
 
     if (finalList.length === 0) return;
 
-    const leader = finalList.find(d=>typeof d.position==='number' && d.position>0 && d.position<200) || finalList[0];
-    const leaderLaps = leader.laps ?? 0;
+    const leader = sessionType === 'qualy'
+      ? (finalList.find(d => d.fastestLapMs != null) || finalList[0])
+      : (finalList.find(d => typeof d.position === 'number' && d.position > 0 && d.position < 200) || finalList[0]);
+    const leaderLaps = sessionType === 'race' ? (leader.laps ?? 0) : 0;
 
-    // Mark lapped cars
     for (const d of finalList) {
-      d.lapsBehind = leader.laps - d.laps;
+      d.lapsBehind = (leader.laps ?? 0) - (d.laps ?? 0);
     }
 
-    // RACE FINISH DETECTION
     let becameFinished = false;
-    if (totalLaps > 0 && !raceFinished && leaderLaps >= totalLaps) {
+    if (sessionType === 'race' && totalLaps > 0 && !raceFinished && leaderLaps >= totalLaps) {
       raceFinished = true;
       becameFinished = true;
       finalResults = finalList.map(d => ({
@@ -389,15 +410,14 @@ const { InSim } = nodeInsimPkg;
         timeMs: d.finishTime ?? d.totalTime ?? null,
         fastestLapMs: d.fastestLapMs ?? null
       }));
-      finalResults.sort((a,b)=> (a.position||9999)-(b.position||9999));
+      finalResults.sort((a,b) => (a.position||9999)-(b.position||9999));
       console.log('🏁 Race finished — snapshot final results with frozen times');
-    } else if (raceFinished && (totalLaps === 0 || leaderLaps < totalLaps)) {
+    } else if (raceFinished && (sessionType !== 'race' || totalLaps === 0 || leaderLaps < totalLaps)) {
       raceFinished = false;
       finalResults = null;
       console.log('🔁 Race restarted/reset — live mode');
     }
 
-    // compute session fastest
     let fastestHolder = null;
     for (const d of finalList) {
       if (d.fastestLapMs != null) {
@@ -405,78 +425,75 @@ const { InSim } = nodeInsimPkg;
       }
     }
 
-    // build leaderboard rows
     const leaderboard = finalList.map((d, idx) => {
       let gapStr = '';
-      const displayTime = d.finishTime ?? d.totalTime;
-      
-      if (d.plid === leader.plid) {
-        gapStr = 'LEADER';
-      } else if (d.lapsBehind > 0) {
-        gapStr = `+${d.lapsBehind}L`;
+      if (sessionType === 'qualy') {
+        if (d.plid === leader.plid) gapStr = 'P1';
+        else if (leader.fastestLapMs != null && d.fastestLapMs != null) {
+          const diff = (d.fastestLapMs - leader.fastestLapMs) / 1000;
+          gapStr = diff >= 60 ? `+${Math.floor(diff/60)}:${String((diff%60).toFixed(3)).padStart(6,'0')}` : `+${diff.toFixed(3)}`;
+        } else gapStr = '';
       } else {
-        const carAhead = idx > 0 ? finalList[idx - 1] : leader;
-        const carAheadTime = carAhead.finishTime ?? carAhead.totalTime;
-        
-        if (carAheadTime != null && displayTime != null) {
-          const diffSec = (displayTime - carAheadTime) / 1000;
-          if (diffSec < 0.01) {
-            gapStr = '+0.000';
-          } else if (diffSec < 60) {
-            gapStr = `+${diffSec.toFixed(3)}`;
-          } else {
-            const mins = Math.floor(diffSec / 60);
-            const secs = (diffSec % 60).toFixed(3);
-            gapStr = `+${mins}:${secs.padStart(6,'0')}`;
-          }
-        } else if (carAhead && carAhead.node != null && d.node != null) {
-          const nodeDiff = carAhead.node - d.node;
-          if (nodeDiff > 0) {
-            const approxSec = nodeDiff / 10;
-            gapStr = approxSec < 60 ? `+${approxSec.toFixed(1)}` : `+${Math.floor(approxSec/60)}:${String(Math.round(approxSec%60)).padStart(2,'0')}`;
+        const displayTime = d.finishTime ?? d.totalTime;
+        if (d.plid === leader.plid) gapStr = 'LEADER';
+        else if (d.lapsBehind > 0) gapStr = `+${d.lapsBehind}L`;
+        else {
+          const carAhead = idx > 0 ? finalList[idx - 1] : leader;
+          const carAheadTime = carAhead.finishTime ?? carAhead.totalTime;
+          if (carAheadTime != null && displayTime != null) {
+            const diffSec = (displayTime - carAheadTime) / 1000;
+            if (diffSec < 0.01) gapStr = '+0.000';
+            else if (diffSec < 60) gapStr = `+${diffSec.toFixed(3)}`;
+            else { const mins = Math.floor(diffSec/60); const secs = (diffSec%60).toFixed(3); gapStr = `+${mins}:${secs.padStart(6,'0')}`; }
+          } else if (carAhead && carAhead.node != null && d.node != null) {
+            const nodeDiff = carAhead.node - d.node;
+            if (nodeDiff > 0) {
+              const approxSec = nodeDiff / 10;
+              gapStr = approxSec < 60 ? `+${approxSec.toFixed(1)}` : `+${Math.floor(approxSec/60)}:${String(Math.round(approxSec%60)).padStart(2,'0')}`;
+            }
           }
         }
       }
-      
+
       return {
         plid: d.plid,
         name: d.name,
         rawName: d.rawName || d.name,
         color: d.color || null,
-        position: d.position,
+        position: d.position ?? (idx+1),
         laps: d.laps,
         lapsBehind: d.lapsBehind,
         node: d.node,
-        totalTime: displayTime ?? null,
+        totalTime: d.finishTime ?? d.totalTime ?? null,
         gap: gapStr,
         fastestLapMs: d.fastestLapMs ?? null
       };
     });
 
-    // Calculate race elapsed time
     const raceElapsedMs = raceStartTime ? (Date.now() - raceStartTime) : 0;
+    const lapText = totalLaps > 0 ? `LAP ${leaderLaps} / ${totalLaps}` : (sessionType === 'qualy' ? 'QUALIFYING' : `LAP ${leaderLaps}`);
 
-    // final payload
     const payload = {
       timestamp: Date.now(),
+      sessionType,
       lap: leaderLaps,
       totalLaps: totalLaps || 0,
+      lapText,
+      leader: leader ? { plid: leader.plid, name: leader.name } : null,
       leaderboard,
       fastest: fastestHolder ? { plid: fastestHolder.plid, timeMs: fastestHolder.fastestLapMs } : null,
-      raceFinished: raceFinished,
+      raceFinished,
       finalResults: raceFinished ? finalResults : null,
-      becameFinished: becameFinished,
-      raceElapsedMs: raceElapsedMs
+      becameFinished,
+      raceElapsedMs
     };
 
-    // throttled broadcast
     const nowUI = Date.now();
     if (nowUI - lastBroadcast > UI_UPDATE_MS || becameFinished) {
       lastBroadcast = nowUI;
       broadcast(payload);
     }
 
-    // throttled logging
     const now2 = Date.now();
     if (leader.plid !== lastLeaderPlid || now2 - lastLogTime > LOG_THROTTLE_MS || becameFinished) {
       lastLeaderPlid = leader.plid;
@@ -493,7 +510,7 @@ const { InSim } = nodeInsimPkg;
       if (!hasPlaceholders) return;
       inSim.send(new IS_TINY({ ReqI: tinyReqCounter++ % 255 || 1, SubT: TinyType.TINY_NPL }));
     } catch (err) {
-      console.warn('Tiny send error (ignored):', err?.message ?? err);
+      // ignore
     }
   }, NAME_RESOLVE_INTERVAL_MS);
 
