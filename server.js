@@ -12,7 +12,6 @@ import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import nodeInsimPkg from 'node-insim';
-import path from 'path';
 const { InSim } = nodeInsimPkg;
 
 (async () => {
@@ -20,7 +19,7 @@ const { InSim } = nodeInsimPkg;
   const { PacketType, InSimFlags, IS_TINY, TinyType, IS_SCC } = packets;
 
   /* CONFIG */
-  const HTTP_PORT = Number(process.env.PORT) || 3000;
+  const HTTP_PORT = 3000;
   const HTTP_BIND_HOST = '0.0.0.0'; // Listen on all interfaces so OBS can access it
   const INSIM_HOST = '127.0.0.1';
   const INSIM_PORT = 29999;
@@ -35,11 +34,6 @@ const { InSim } = nodeInsimPkg;
   const app = express();
   app.use(express.json());
   app.use(express.static('public'));
-
-  // admin GUI route
-  app.get('/admin', (req, res) => {
-    res.sendFile(path.join(process.cwd(), 'public', 'admin.html'));
-  });
 
   let lastPayload = null;
   app.get('/api/leaderboard', (req, res) => res.json(lastPayload || { info: 'no data yet' }));
