@@ -2,9 +2,31 @@
   "name": "sra-leaderboard",
   "version": "1.0.0",
   "type": "module",
+  "bin": "server.js",
+  "pkg": {
+    "assets": [
+      "public/**/*"
+    ],
+    "scripts": [
+      "node_modules/**/*.js"
+    ],
+    "targets": [
+      "node18-win-x64"
+    ],
+    "outputPath": "dist"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "build": "pkg . --compress Brotli",
+    "dev": "node server.js"
+  },
   "dependencies": {
     "express": "^5.2.1",
     "node-insim": "^3.0.0",
     "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "open": "^11.0.0",
+    "pkg": "^5.8.1"
   }
 }

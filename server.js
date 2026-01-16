@@ -20,6 +20,7 @@ const { InSim } = nodeInsimPkg;
 
   /* CONFIG */
   const HTTP_PORT = 3000;
+  const HTTP_BIND_HOST = '0.0.0.0'; // Listen on all interfaces so OBS can access it
   const INSIM_HOST = '127.0.0.1';
   const INSIM_PORT = 29999;
   const MCI_INTERVAL_MS = 100;
@@ -53,7 +54,10 @@ const { InSim } = nodeInsimPkg;
   });
 
   const server = http.createServer(app);
-  server.listen(HTTP_PORT, () => console.log(`🌐 Overlay: http://localhost:${HTTP_PORT}`));
+  server.listen(HTTP_PORT, HTTP_BIND_HOST, () => {
+    console.log(`🌐 Overlay: http://localhost:${HTTP_PORT}`);
+    console.log(`🌐 From OBS (replace localhost with your IP): http://<YOUR-IP>:${HTTP_PORT}`);
+  });
 
   /* InSim - create before websocket so handlers can use it */
   const inSim = new InSim();
