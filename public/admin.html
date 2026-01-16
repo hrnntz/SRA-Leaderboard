@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SRA Leaderboard — Admin</title>
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>SRA Leaderboard — Admin</h1>
+      <div id="status" class="status">Connecting...</div>
+    </header>
+
+    <section class="panel">
+      <label>Overlay URL</label>
+      <div class="row">
+        <input id="overlayUrl" readonly>
+        <button id="copyBtn">Copy</button>
+      </div>
+      <div class="small">Paste this URL into OBS Browser Source. Click "Open Overlay" to preview.</div>
+      <div class="actions">
+        <button id="openOverlay">Open Overlay</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <label>WebSocket</label>
+      <div class="row">
+        <button id="wsConnect">Connect WS</button>
+        <div id="wsState" class="small">Disconnected</div>
+      </div>
+      <div class="row">
+        <button id="testFocus">Test Focus (PLID 1)</button>
+        <div id="wsLast" class="small">—</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <label>Latest Payload</label>
+      <pre id="payload">No data yet</pre>
+      <div class="small">Auto-refreshes every 1s.</div>
+    </section>
+
+    <footer>
+      <small>Lightweight admin GUI — debug info and quick actions</small>
+    </footer>
+  </div>
+
+  <script src="/admin.js"></script>
+</body>
+</html>
