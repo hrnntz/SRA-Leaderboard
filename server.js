@@ -1,28 +1,38 @@
 /**
  * server.js
- * - Safe MCI-only InSim connection (no NLP flag)
- * - Active, throttled name-resolve (IS_TINY TINY_NPL) only when placeholders exist
- * - Dedupe AI/PLID shadows
- * - Detect race finish by lap count and snapshot final results
- * - Broadcasts payload including: leaderboard, totalLaps, lapText, fastest, raceFinished, finalResults
- * - Accepts client "focus" (click) and sends IS_SCC to LFS to change camera ViewPLID
+ * - Full server with:
+ *   - lap counter + lapText
+ *   - frozen race timer on finish (raceEndTime)
+ *   - vehicle image & car abbreviation detection:
+ *       * default cars -> /static/showroom/cars160/XXX.png   (XXX = 3-letter abbrev)
+ *       * mods -> /attachment/{modId}/thumb
+ *   - drives type lookup (via lfs-api if available)
+ *   - exposes carImage, carAbbrev, modAttachmentId on leaderboard entries
  */
 
 import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import nodeInsimPkg from 'node-insim';
+import path from 'path';
+import dotenv from 'dotenv';
+import LFSAPIPkg from 'lfs-api';
+import { fileURLToPath } from 'url';
 const { InSim } = nodeInsimPkg;
+const LFSAPI = LFSAPIPkg.default || LFSAPIPkg;
+
+dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 (async () => {
   const packets = await import('node-insim/packets');
   const { PacketType, InSimFlags, IS_TINY, TinyType, IS_SCC } = packets;
 
   /* CONFIG */
-  const HTTP_PORT = 3000;
-  const HTTP_BIND_HOST = '0.0.0.0'; // Listen on all interfaces so OBS can access it
-  const INSIM_HOST = '127.0.0.1';
-  const INSIM_PORT = 29999;
+  const HTTP_PORT = Number(process.env.PORT || 3000);
+  const HTTP_BIND_HOST = process.env.BIND_HOST || '0.0.0.0';
+  const INSIM_HOST = process.env.INSIM_HOST || '127.0.0.1';
+  const INSIM_PORT = Number(process.env.INSIM_PORT || 29999);
   const MCI_INTERVAL_MS = 100;
   const NAME_RESOLVE_INTERVAL_MS = 5000;
   const LOG_THROTTLE_MS = 10000;
@@ -33,12 +43,13 @@ const { InSim } = nodeInsimPkg;
   /* EXPRESS */
   const app = express();
   app.use(express.json());
-  app.use(express.static('public'));
+  app.use(express.static('public')); // serve static assets (including /car_images, if provided)
+
+  app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
   let lastPayload = null;
   app.get('/api/leaderboard', (req, res) => res.json(lastPayload || { info: 'no data yet' }));
 
-  // Optional POST camera endpoint (alternate to websocket focus)
   app.post('/camera', (req, res) => {
     const plid = Number(req.body?.plid || 0);
     if (!Number.isFinite(plid)) return res.status(400).json({ ok: false, error: 'invalid plid' });
@@ -56,10 +67,9 @@ const { InSim } = nodeInsimPkg;
   const server = http.createServer(app);
   server.listen(HTTP_PORT, HTTP_BIND_HOST, () => {
     console.log(`🌐 Overlay: http://localhost:${HTTP_PORT}`);
-    console.log(`🌐 From OBS (replace localhost with your IP): http://<YOUR-IP>:${HTTP_PORT}`);
   });
 
-  /* InSim - create before websocket so handlers can use it */
+  /* InSim */
   const inSim = new InSim();
   console.log('🔎 Connecting to LFS InSim...');
   inSim.connect({
@@ -73,7 +83,7 @@ const { InSim } = nodeInsimPkg;
 
   /* WEBSOCKET */
   const wss = new WebSocketServer({ server });
-  const clientFocus = new Map(); // ws -> plid
+  const clientFocus = new Map();
 
   wss.on('connection', ws => {
     if (lastPayload) ws.send(JSON.stringify(lastPayload));
@@ -86,8 +96,6 @@ const { InSim } = nodeInsimPkg;
           const plid = Number(data.plid) || 0;
           clientFocus.set(ws, plid);
           console.log(`👁️ Client focused on PLID ${plid}`);
-
-          // Send IS_SCC to InSim
           try {
             inSim.send(new IS_SCC({ ViewPLID: plid }));
             console.log(`🎯 Sent IS_SCC -> ViewPLID ${plid}`);
@@ -108,7 +116,6 @@ const { InSim } = nodeInsimPkg;
     const json = JSON.stringify(obj);
     for (const c of wss.clients) {
       if (c.readyState === 1) {
-        // include individual focused plid if any
         const focusedPLID = clientFocus.get(c);
         const payload = focusedPLID ? { ...obj, focusedPLID } : obj;
         try { c.send(JSON.stringify(payload)); } catch (_) {}
@@ -125,37 +132,177 @@ const { InSim } = nodeInsimPkg;
   let lastLogTime = 0;
   let lastLeaderPlid = null;
   let raceStartTime = null;
+  let raceEndTime = null; // freeze end timestamp
   let sessionType = 'race';
+
+  /* LFS API (optional) */
+  const CLIENT_ID = process.env.LFS_CLIENT_ID || '';
+  const CLIENT_SECRET = process.env.LFS_CLIENT_SECRET || '';
+
+  let api = null;
+  const vehicleCache = new Map(); // modelId -> { drive, imageUrl, carAbbrev, modAttachmentId, imageTried }
+  const driverInfoCache = new Map();
+
+  if (CLIENT_ID && CLIENT_SECRET) {
+    try {
+      api = new LFSAPI(CLIENT_ID, CLIENT_SECRET);
+      console.log('✅ LFS API initialized with credentials');
+    } catch (err) {
+      console.warn('⚠️ LFS API init failed:', err?.message ?? err);
+      api = null;
+    }
+  } else {
+    console.warn('⚠️  LFS API credentials not set. Vehicle images/drive types will be best-effort or fallback to local assets.');
+  }
+
+  /**
+   * Determine if a modelId looks like a default LFS car abbreviation (3 letters).
+   * Common LFS showroom images use: /static/showroom/cars160/XXX.png
+   */
+  function isDefaultCarAbbrev(m) {
+    if (!m) return false;
+    const s = String(m).trim();
+    return /^[A-Za-z]{3}$/.test(s);
+  }
+
+  /**
+   * Determine if a modelId looks like a mod/attachment id (numeric or numeric-ish)
+   * We'll accept pure numeric strings or strings that look like an attachment ID.
+   */
+  function looksLikeModId(m) {
+    if (!m) return false;
+    const s = String(m).trim();
+    // numeric or numeric with minor prefix/suffix
+    return /^\d+$/.test(s) || /^m?_?\d+$/.test(s);
+  }
+
+  /**
+   * Get best vehicle image + metadata:
+   * - if modelId is 3 letters -> default showroom path (carAbbrev)
+   * - if modelId looks numeric -> attachment thumb (/attachment/{id}/thumb) and set modAttachmentId
+   * - else try LFS API fields defensively
+   * Returns: { imageUrl, carAbbrev, modAttachmentId }
+   */
+  async function getVehicleImageInfo(modelId) {
+    if (!modelId) return { imageUrl: null, carAbbrev: null, modAttachmentId: null };
+    const key = String(modelId);
+    if (vehicleCache.has(key) && vehicleCache.get(key).imageTried) {
+      const cached = vehicleCache.get(key);
+      return { imageUrl: cached.imageUrl || null, carAbbrev: cached.carAbbrev || null, modAttachmentId: cached.modAttachmentId || null };
+    }
+
+    let carAbbrev = null;
+    let modAttachmentId = null;
+    let imageUrl = null;
+
+    // 1) fast path: default car abbreviation 3 letters
+    if (isDefaultCarAbbrev(modelId)) {
+      carAbbrev = String(modelId).toUpperCase();
+      imageUrl = `/static/showroom/cars160/${carAbbrev}.png`;
+    } else if (looksLikeModId(modelId)) {
+      // treat as mod attachment id
+      // prefer numeric digits only
+      const s = String(modelId).replace(/^m_?/i, '').replace(/[^0-9]/g, '');
+      if (s) {
+        modAttachmentId = s;
+        imageUrl = `https://www.lfs.net/attachment/{id}/thumb`;
+      }
+    }
+
+    // 2) If not found yet, try LFS API (defensive)
+    if (!imageUrl && api) {
+      try {
+        const res = await api.getVehicleMod(modelId);
+        const vehicleData = res?.data || res;
+        const v = vehicleData?.vehicle || vehicleData;
+        // attempt to find image fields
+        const candidates = [];
+
+        // If LFS API gives a code/abbrev field, use it
+        if (!carAbbrev) {
+          const maybeCode = v?.code || v?.abbr || v?.shortName || v?.abbrev || v?.model;
+          if (maybeCode && isDefaultCarAbbrev(maybeCode)) {
+            carAbbrev = String(maybeCode).toUpperCase();
+            imageUrl = `/static/showroom/cars160/${carAbbrev}.png`;
+          }
+        }
+
+        // Search common image fields
+        if (v) {
+          if (v.thumb) candidates.push(v.thumb);
+          if (v.thumbnail) candidates.push(v.thumbnail);
+          if (v.image) candidates.push(v.image);
+          if (v.imageUrl) candidates.push(v.imageUrl);
+          if (v.images && Array.isArray(v.images)) candidates.push(...v.images.filter(Boolean));
+          if (v.media && Array.isArray(v.media)) for (const m of v.media) { if (m.url) candidates.push(m.url); if (m.image) candidates.push(m.image); }
+          // some APIs provide attachments or mod id
+          if (v.attachment_id || v.attachmentId || v.attach) candidates.push(`/attachment/${v.attachment_id || v.attachmentId || v.attach}/thumb`);
+          if (v.modid || v.modId) {
+            const s = String(v.modid || v.modId).replace(/^m_?/i, '').replace(/[^0-9]/g, '');
+            if (s) { modAttachmentId = s; candidates.push(`https://www.lfs.net/attachment/${id}/thumb`); }
+          }
+        }
+
+        for (const c of candidates) {
+          if (!c) continue;
+          const s = String(c);
+          if (s.startsWith('http://') || s.startsWith('https://') || s.startsWith('/')) {
+            imageUrl = s;
+            break;
+          }
+        }
+      } catch (err) {
+        // ignore, fallback below
+      }
+    }
+
+    // 3) Fallback: local public/car_images/{modelId}.png or public/car_images/{key}.png
+    if (!imageUrl) {
+      // if we have carAbbrev use showroom path; if modAttachmentId use attachment path, else try local car_images
+      if (carAbbrev) {
+        imageUrl = `/static/showroom/cars160/${carAbbrev}.png`;
+      } else if (modAttachmentId) {
+        imageUrl = `https://www.lfs.net/attachment/${modAttachmentId}/thumb`;
+      } else {
+        // try a local fallback folder (optional)
+        imageUrl = `/car_images/${key}.png`;
+      }
+    }
+
+    vehicleCache.set(key, { imageUrl, carAbbrev, modAttachmentId, imageTried: true, drive: vehicleCache.get(key)?.drive ?? null });
+    return { imageUrl, carAbbrev, modAttachmentId };
+  }
+
+  async function getVehicleDriveType(modelId) {
+    if (!api || !modelId) return null;
+    const key = String(modelId);
+    if (vehicleCache.has(key) && vehicleCache.get(key).drive !== undefined) return vehicleCache.get(key).drive || null;
+    try {
+      const { data: vehicleData } = await api.getVehicleMod(modelId);
+      const v = vehicleData?.vehicle || vehicleData;
+      if (v && typeof api.lookupVehicleDriveType === 'function') {
+        const driveType = api.lookupVehicleDriveType(v.drive ?? v.driveType ?? null);
+        const current = vehicleCache.get(key) || {};
+        current.drive = driveType;
+        vehicleCache.set(key, current);
+        return driveType;
+      }
+    } catch (err) {
+      // ignore
+    }
+    const current = vehicleCache.get(key) || {};
+    current.drive = null;
+    vehicleCache.set(key, current);
+    return null;
+  }
 
   /* HELPERS */
   const safeStr = v => (v === undefined || v === null ? '' : String(v));
-  const CARET_COLOR_MAP = {
-    '0': '#000000','1': '#ff3333','2': '#33ff66','3': '#ffd633',
-    '4': '#3399ff','5': '#ff66cc','6': '#33ffff','7': '#ffffff'
-  };
-
-  function stripCaretCodes(s) {
-    if (!s) return '';
-    return String(s).replace(/\^[0-9A-Fa-f]/g, '').replace(/\u0000/g, '').trim();
-  }
-  function extractLastCaretColor(s) {
-    if (!s) return null;
-    const matches = [...String(s).matchAll(/\^([0-9A-Fa-f])/g)];
-    if (!matches.length) return null;
-    const last = matches[matches.length - 1][1];
-    return CARET_COLOR_MAP[last] ?? null;
-  }
-  function extractNameFromPacket(obj) {
-    if (!obj) return '';
-    const cands = ['PName','PNameLong','PNameShort','UName','PlayerName','Name','UserName','HName'];
-    for (const k of cands) if (k in obj && obj[k]) return safeStr(obj[k]);
-    return '';
-  }
-  function isPlaceholderName(name) {
-    if (!name) return true;
-    const s = name.trim();
-    return /^PLID\s*\d+$/i.test(s) || /^Player\s*\d+$/i.test(s) || /^Car\s*\d+$/i.test(s);
-  }
+  const CARET_COLOR_MAP = { '0': '#000000','1': '#ff3333','2': '#33ff66','3': '#ffd633','4': '#3399ff','5': '#ff66cc','6': '#33ffff','7': '#ffffff' };
+  function stripCaretCodes(s) { if (!s) return ''; return String(s).replace(/\^[0-9A-Fa-f]/g, '').replace(/\u0000/g, '').trim(); }
+  function extractLastCaretColor(s) { if (!s) return null; const matches = [...String(s).matchAll(/\^([0-9A-Fa-f])/g)]; if (!matches.length) return null; const last = matches[matches.length - 1][1]; return CARET_COLOR_MAP[last] ?? null; }
+  function extractNameFromPacket(obj) { if (!obj) return ''; const cands = ['PName','PNameLong','PNameShort','UName','PlayerName','Name','UserName','HName']; for (const k of cands) if (k in obj && obj[k]) return safeStr(obj[k]); return ''; }
+  function isPlaceholderName(name) { if (!name) return true; const s = name.trim(); return /^PLID\s*\d+$/i.test(s) || /^Player\s*\d+$/i.test(s) || /^Car\s*\d+$/i.test(s); }
   function isPLIDShadow(name) { if (!name) return false; return /^PLID\s*\d+$/i.test(String(name).trim()); }
   function isAIName(name) { if (!name) return false; return /^AI\s*\d+/i.test(String(name).trim()); }
   function normalizeKey(name) { return (name || '').trim().toLowerCase(); }
@@ -176,20 +323,13 @@ const { InSim } = nodeInsimPkg;
     raceFinished = false;
     finalResults = null;
     raceStartTime = null;
+    raceEndTime = null;
     for (const d of drivers.values()) {
-      d.laps = 0;
-      d.node = 0;
-      d.prevNode = 0;
-      d.position = 99;
-      d.totalTime = null;
-      d.fastestLapMs = null;
-      d.finishTime = null;
-      d.lastSeen = Date.now();
+      d.laps = 0; d.node = 0; d.prevNode = 0; d.position = 99; d.totalTime = null; d.fastestLapMs = null; d.finishTime = null; d.lastSeen = Date.now();
     }
     console.log(`🔁 Race state reset ${reason ? `(${reason})` : ''}`);
   }
 
-  /* PACKET HANDLERS */
   inSim.on(PacketType.ISP_VER, pkt => console.log(`✅ ISP_VER: ${pkt.Product} ${pkt.Version}`));
 
   inSim.on(PacketType.ISP_RACE, pkt => {
@@ -197,6 +337,7 @@ const { InSim } = nodeInsimPkg;
     sessionType = totalLaps > 0 ? 'race' : 'qualy';
     if (totalLaps) console.log(`🏁 Race configured: totalLaps = ${totalLaps}`);
   });
+
   inSim.on(PacketType.ISP_STA, pkt => {
     totalLaps = pkt.RaceLaps ?? pkt.TotalLaps ?? totalLaps;
     sessionType = totalLaps > 0 ? 'race' : 'qualy';
@@ -215,8 +356,6 @@ const { InSim } = nodeInsimPkg;
           d.finishTime = d.totalTime ?? pkt.ETime ?? 0;
           console.log(`🏁 FINISH: ${d.name} completed race at position ${d.position} - Final Time: ${(d.finishTime / 1000).toFixed(2)}s`);
         }
-      } else {
-        // console.log(`🏁 LAP: ${d.name} completed lap ${lapsDone} - LTime: ${(pkt.LTime / 1000).toFixed(2)}s`);
       }
       if (pkt.LTime && pkt.LTime > 0) {
         if (d.fastestLapMs === null || pkt.LTime < d.fastestLapMs) d.fastestLapMs = pkt.LTime;
@@ -230,21 +369,42 @@ const { InSim } = nodeInsimPkg;
     const raw = extractNameFromPacket(pkt) || `PLID ${plid}`;
     const color = extractLastCaretColor(raw);
     const name = stripCaretCodes(raw) || `PLID ${plid}`;
+    const modelId = pkt.Model || pkt.CarModel || pkt.CarType || null;
+
     const entry = drivers.get(plid) ?? {
-      plid, name, rawName: raw, color, position: 99, laps: 0, node: 0, prevNode: 0,
-      totalTime: null, fastestLapMs: null, lastSeen: Date.now(), nameTs: Date.now(), finishTime: null
+      plid,
+      name,
+      rawName: raw,
+      color,
+      position: 99,
+      laps: 0,
+      node: 0,
+      prevNode: 0,
+      totalTime: null,
+      fastestLapMs: null,
+      lastSeen: Date.now(),
+      nameTs: Date.now(),
+      finishTime: null,
+      modelId: modelId,
+      driveType: null,
+      driveTypeFetched: false,
+      driverInfoFetched: false,
+      countryCode: null,
+      flagUrl: null,
+      carImage: null,
+      carImageFetched: false,
+      carAbbrev: null,
+      modAttachmentId: null
     };
     entry.rawName = raw; entry.color = color; entry.name = name; entry.nameTs = Date.now();
+    if (modelId) entry.modelId = modelId;
     drivers.set(plid, entry);
-    // console.log(`👤 NPL: ${name} (PLID ${plid})`);
+    if (modelId) console.log(`👤 NPL: ${name} (PLID ${plid}) - Vehicle: ${modelId}`);
   });
 
   inSim.on(PacketType.ISP_PLL, pkt => {
     const plid = pkt.PLID;
-    if (drivers.has(plid)) {
-      // console.log(`👋 PLL: ${drivers.get(plid).name} (PLID ${plid})`);
-      drivers.delete(plid);
-    }
+    if (drivers.has(plid)) drivers.delete(plid);
   });
 
   inSim.on(PacketType.ISP_RST, pkt => {
@@ -252,26 +412,23 @@ const { InSim } = nodeInsimPkg;
     resetRaceState('ISP_RST');
   });
 
+  // ISP_REO: try to snapshot final results + carImages if available
   inSim.on(PacketType.ISP_REO, pkt => {
     raceFinished = true;
+    raceEndTime = Date.now();
     finalResults = pkt.PLID.map((plid,index) => {
       const d = drivers.get(plid);
-      return d ? {
-        position: index+1,
-        plid: d.plid,
-        name: d.name,
-        timeMs: d.finishTime ?? d.totalTime ?? null,
-        fastestLapMs: d.fastestLapMs ?? null
-      } : null;
+      return d ? { position: index+1, plid: d.plid, name: d.name, timeMs: d.finishTime ?? d.totalTime ?? null, fastestLapMs: d.fastestLapMs ?? null, carImage: d.carImage || null, carAbbrev: d.carAbbrev || null, modAttachmentId: d.modAttachmentId || null } : null;
     }).filter(Boolean);
     finalResults.sort((a,b)=> (a.position||9999)-(b.position||9999));
-    console.log('🏁 ISP_REO received — race officially finished');
+    console.log('🏁 ISP_REO received — race officially finished (REO)');
   });
 
-  /* MCI handler */
-  inSim.on(PacketType.ISP_MCI, packet => {
+  /* MCI handler (main) */
+  inSim.on(PacketType.ISP_MCI, async packet => {
     if (!packet.Info?.length) return;
 
+    // Update drivers from MCI info
     for (const car of packet.Info) {
       const plid = car.PLID;
       const rawFromCar = extractNameFromPacket(car);
@@ -296,7 +453,17 @@ const { InSim } = nodeInsimPkg;
           fastestLapMs: null,
           lastSeen: Date.now(),
           nameTs: rawFromCar ? Date.now() : 0,
-          finishTime: null
+          finishTime: null,
+          modelId: null,
+          driveType: null,
+          driveTypeFetched: false,
+          driverInfoFetched: false,
+          countryCode: null,
+          flagUrl: null,
+          carImage: null,
+          carImageFetched: false,
+          carAbbrev: null,
+          modAttachmentId: null
         });
         continue;
       }
@@ -320,6 +487,10 @@ const { InSim } = nodeInsimPkg;
       }
       d.prevNode = car.Node;
       d.lastSeen = Date.now();
+
+      // If MCI packet contains a model id (some versions put Model in MCI), capture it
+      const modelIdFromMci = car.Model || car.CarModel || car.CarType || null;
+      if (modelIdFromMci) d.modelId = modelIdFromMci;
     }
 
     totalLaps = packet.TotalLaps ?? packet.RaceLaps ?? totalLaps;
@@ -330,7 +501,7 @@ const { InSim } = nodeInsimPkg;
       if (now - d.lastSeen > STALE_DRIVER_MS) drivers.delete(plid);
     }
 
-    // sort (session aware)
+    // sort + dedupe (session aware) - intermediate
     const tempList = Array.from(drivers.values()).sort((a,b) => {
       if (sessionType === 'qualy') {
         const aTime = a.fastestLapMs == null ? Infinity : a.fastestLapMs;
@@ -394,34 +565,38 @@ const { InSim } = nodeInsimPkg;
 
     if (finalList.length === 0) return;
 
+    // Concurrently fetch drive types and car images (bounded)
+    await Promise.all(finalList.map(async (d) => {
+      if (d.modelId && !d.driveTypeFetched) {
+        try { d.driveType = await getVehicleDriveType(d.modelId); } catch (err) { d.driveType = null; }
+        d.driveTypeFetched = true;
+        if (d.driveType) console.log(`🚗 Fetched drive type for ${d.name} (${d.modelId}): ${d.driveType}`);
+      }
+      if (d.modelId && !d.carImageFetched) {
+        try {
+          const info = await getVehicleImageInfo(d.modelId);
+          d.carImage = info.imageUrl || null;
+          d.carAbbrev = info.carAbbrev || null;
+          d.modAttachmentId = info.modAttachmentId || null;
+        } catch (err) {
+          d.carImage = `/car_images/${String(d.modelId)}`; // last resort
+        }
+        d.carImageFetched = true;
+      }
+    }));
+
+    // leader selection
     const leader = sessionType === 'qualy'
       ? (finalList.find(d => d.fastestLapMs != null) || finalList[0])
-      : (finalList.find(d => typeof d.position === 'number' && d.position > 0 && d.position < 200) || finalList[0]);
+      : (finalList.find(d => { const hasValidPos = typeof d.position === 'number' && d.position > 0 && d.position < 200; const isMoving = (d.node ?? 0) > 0 || (d.laps ?? 0) > 0; return hasValidPos && isMoving; }) || finalList[0]);
+
     const leaderLaps = sessionType === 'race' ? (leader.laps ?? 0) : 0;
 
-    for (const d of finalList) {
-      d.lapsBehind = (leader.laps ?? 0) - (d.laps ?? 0);
-    }
+    for (const d of finalList) d.lapsBehind = (leader.laps ?? 0) - (d.laps ?? 0);
 
-    let becameFinished = false;
-    if (sessionType === 'race' && totalLaps > 0 && !raceFinished && leaderLaps >= totalLaps) {
-      raceFinished = true;
-      becameFinished = true;
-      finalResults = finalList.map(d => ({
-        position: d.position,
-        plid: d.plid,
-        name: d.name,
-        timeMs: d.finishTime ?? d.totalTime ?? null,
-        fastestLapMs: d.fastestLapMs ?? null
-      }));
-      finalResults.sort((a,b) => (a.position||9999)-(b.position||9999));
-      console.log('🏁 Race finished — snapshot final results with frozen times');
-    } else if (raceFinished && (sessionType !== 'race' || totalLaps === 0 || leaderLaps < totalLaps)) {
-      raceFinished = false;
-      finalResults = null;
-      console.log('🔁 Race restarted/reset — live mode');
-    }
 
+
+    // fastest holder
     let fastestHolder = null;
     for (const d of finalList) {
       if (d.fastestLapMs != null) {
@@ -429,6 +604,7 @@ const { InSim } = nodeInsimPkg;
       }
     }
 
+    // build leaderboard (include carImage, carAbbrev, modAttachmentId)
     const leaderboard = finalList.map((d, idx) => {
       let gapStr = '';
       if (sessionType === 'qualy') {
@@ -451,10 +627,7 @@ const { InSim } = nodeInsimPkg;
             else { const mins = Math.floor(diffSec/60); const secs = (diffSec%60).toFixed(3); gapStr = `+${mins}:${secs.padStart(6,'0')}`; }
           } else if (carAhead && carAhead.node != null && d.node != null) {
             const nodeDiff = carAhead.node - d.node;
-            if (nodeDiff > 0) {
-              const approxSec = nodeDiff / 10;
-              gapStr = approxSec < 60 ? `+${approxSec.toFixed(1)}` : `+${Math.floor(approxSec/60)}:${String(Math.round(approxSec%60)).padStart(2,'0')}`;
-            }
+            if (nodeDiff > 0) { const approxSec = nodeDiff / 10; gapStr = approxSec < 60 ? `+${approxSec.toFixed(1)}` : `+${Math.floor(approxSec/60)}:${String(Math.round(approxSec%60)).padStart(2,'0')}`; }
           }
         }
       }
@@ -470,12 +643,24 @@ const { InSim } = nodeInsimPkg;
         node: d.node,
         totalTime: d.finishTime ?? d.totalTime ?? null,
         gap: gapStr,
-        fastestLapMs: d.fastestLapMs ?? null
+        fastestLapMs: d.fastestLapMs ?? null,
+        driveType: d.driveType || null,
+        countryCode: d.countryCode || null,
+        flagUrl: d.flagUrl || null,
+        carImage: d.carImage || null,
+        carAbbrev: d.carAbbrev || null,
+        modAttachmentId: d.modAttachmentId || null
       };
     });
 
-    const raceElapsedMs = raceStartTime ? (Date.now() - raceStartTime) : 0;
+    const raceElapsedMs = raceStartTime
+      ? (raceFinished && raceEndTime ? (raceEndTime - raceStartTime) : (Date.now() - raceStartTime))
+      : 0;
+
     const lapText = totalLaps > 0 ? `LAP ${leaderLaps} / ${totalLaps}` : (sessionType === 'qualy' ? 'QUALIFYING' : `LAP ${leaderLaps}`);
+
+    // podium images from finalResults (top 3) when finished
+    const podiumImages = raceFinished && finalResults ? finalResults.slice(0,3).map(r => r.carImage || null) : null;
 
     const payload = {
       timestamp: Date.now(),
@@ -483,13 +668,14 @@ const { InSim } = nodeInsimPkg;
       lap: leaderLaps,
       totalLaps: totalLaps || 0,
       lapText,
-      leader: leader ? { plid: leader.plid, name: leader.name } : null,
+      leader: leader ? { plid: leader.plid, name: leader.name, carImage: leader.carImage || null, carAbbrev: leader.carAbbrev || null, modAttachmentId: leader.modAttachmentId || null } : null,
       leaderboard,
       fastest: fastestHolder ? { plid: fastestHolder.plid, timeMs: fastestHolder.fastestLapMs } : null,
       raceFinished,
       finalResults: raceFinished ? finalResults : null,
       becameFinished,
-      raceElapsedMs
+      raceElapsedMs,
+      podiumImages
     };
 
     const nowUI = Date.now();
@@ -513,12 +699,10 @@ const { InSim } = nodeInsimPkg;
       const hasPlaceholders = Array.from(drivers.values()).some(d => isPlaceholderName(d.name));
       if (!hasPlaceholders) return;
       inSim.send(new IS_TINY({ ReqI: tinyReqCounter++ % 255 || 1, SubT: TinyType.TINY_NPL }));
-    } catch (err) {
-      // ignore
-    }
+    } catch (err) { /* ignore */ }
   }, NAME_RESOLVE_INTERVAL_MS);
 
-  /* Shutdown */
+  /* Shutdown handling */
   process.on('SIGINT', () => {
     console.log('\n🛑 Shutting down...');
     try { inSim.disconnect(); } catch (e) {}

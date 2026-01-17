@@ -14,8 +14,18 @@
 <body>
   <div id="overlay">
 
+    <!-- TOP LEFT: Logo (optional) -->
+    <div id="logo-container" style="display:none;">
+      <img src="logo.png" alt="Logo" />
+    </div>
+
     <!-- TOP CENTER: Lap pill -->
     <div id="lap-pill" aria-live="polite">LAP 0 / 0</div>
+
+    <!-- TOP RIGHT: Additional info (optional) -->
+    <div id="info-container" style="display:none;">
+      2025 ROUND 10
+    </div>
 
     <!-- LEFT: Leaderboard -->
     <aside id="board" role="list" aria-label="Leaderboard">
@@ -25,11 +35,17 @@
     <!-- BOTTOM-RIGHT: Selected driver box -->
     <div id="focus-panel" aria-live="polite">
       <div id="focus-pos">-</div>
-      <div id="focus-right">
-        <div id="focus-name">NO DRIVER</div>
-        <div id="focus-gap">GAP TO P1 -</div>
+      <div id="focus-flag-container">
+        <div id="focus-flag"></div>
       </div>
-    </div>
+      <div id="focus-middle">
+        <div id="focus-name">NO DRIVER</div>
+      </div>
+      <div id="focus-gap-section">
+        <div id="focus-gap-label">GAP TO P1</div>
+        <div id="focus-gap-value">-</div>
+      </div>
+      
 
     <!-- DEBUG: Connection status (hidden in CSS, visible in console) -->
     <div id="debug-status" style="position:absolute;top:10px;right:10px;font-size:10px;color:#0f0;background:#000;padding:4px 8px;opacity:0.6;z-index:999;display:none;">WS: CONNECTING</div>

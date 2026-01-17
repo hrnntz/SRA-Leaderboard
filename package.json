@@ -17,16 +17,19 @@
   },
   "scripts": {
     "start": "node server.js",
+    "launch": "node launcher.js",
     "build": "pkg . --compress Brotli",
     "dev": "node server.js"
   },
   "dependencies": {
+    "dotenv": "^16.3.1",
     "express": "^5.2.1",
+    "lfs-api": "^0.1.3",
     "node-insim": "^3.0.0",
+    "open": "^11.0.0",
     "ws": "^8.16.0"
   },
   "devDependencies": {
-    "open": "^11.0.0",
     "pkg": "^5.8.1"
   }
 }

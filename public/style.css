@@ -3,117 +3,162 @@
 html, body { height: 100%; width: 100%; }
 body {
   font-family: "Montserrat", "Segoe UI", Roboto, Arial, sans-serif;
-  background: transparent; /* set to transparent for OBS; use a dark color for dev if you prefer */
+  background: transparent;
   color: #fff;
-  overflow: hidden; /* Prevent scrollbars from the overlay */
+  overflow: hidden;
 }
 
 /* Full-screen overlay container */
 #overlay {
   position: fixed;
-  inset: 0; /* top:0; right:0; bottom:0; left:0 */
-  pointer-events: none; /* allow clicks to pass through unless explicitly enabled on interactive elements */
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ============================================ */
+/* TOP ELEMENTS */
+/* ============================================ */
+
+/* Logo container - top left */
+#logo-container {
+  position: absolute;
+  top: 10px;
+  left: 20px;
+  background: #fff;
+  padding: 8px 12px;
+  z-index: 50;
+  pointer-events: auto;
+}
+#logo-container img {
+  height: 50px;
+  width: auto;
+  display: block;
 }
 
 /* LAP PILL - top center */
 #lap-pill {
   position: absolute;
-  top: 18px;
+  top: 8px;
   left: 50%;
   transform: translateX(-50%);
-  pointer-events: auto; /* allow interaction if needed */
-  background: rgba(6,6,6,0.85);
+  pointer-events: auto;
+  background: #000000;
   color: #fff;
   font-weight: 900;
-  padding: 8px 18px;
-  border-radius: 6px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+  padding: 6px 20px;
+  border-radius: 0;
+  box-shadow: none;
   z-index: 40;
-  font-size: 15px;
+  font-size: 16px;
+  letter-spacing: 2px;
 }
 
-/* BOARD - fixed left column */
+/* Additional info - top right */
+#info-container {
+  position: absolute;
+  top: 10px;
+  right: 20px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  padding: 8px 16px;
+  z-index: 50;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+/* ============================================ */
+/* LEADERBOARD (LEFT SIDE) */
+/* ============================================ */
+
 #board {
   position: absolute;
-  top: 20px;
+  top: 110px;
   left: 20px;
-  width: 240px;
+  width: 280px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 2px;
   z-index: 30;
-  pointer-events: auto; /* make rows clickable */
+  pointer-events: auto;
 }
 
 /* row layout */
 .row {
   display: grid;
-  grid-template-columns: 46px 8px 1fr;
+  grid-template-columns: 32px 1fr 62px;
   align-items: center;
-  height: 44px;
-  border-radius: 6px;
+  height: 24px;
+  border-radius: 0;
   overflow: hidden;
-  background: rgba(8,8,8,0.85);
-  box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+  background: rgba(50, 50, 50, 0.95);
+  box-shadow: none;
   transition: transform .12s ease, box-shadow .12s ease, outline .12s;
   position: relative;
   cursor: pointer;
+  padding-right: 0;
+  border-bottom: 1px solid #000;
+}
+.row:hover { 
+  transform: translateY(-1px); 
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4); 
+}
+.row.selected {
+  outline: 2px solid rgba(0,200,255,0.5);
+  box-shadow: 0 6px 18px rgba(0,200,255,0.2);
+  transform: translateY(-1px);
+}
+
+/* position number */
+.pos {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 32px;
+  background: #000;
+  font-weight: 900;
+  font-size: 12px;
+  color: #fff;
+}
+
+/* position colors */
+.pos-purple { background: #9c27b0 !important; color: white; }
+.pos-red    { background: #e53935 !important; color: white; }
+.pos-green  { background: #43a047 !important; color: white; }
+
+/* colorbar - hidden */
+.colorbar {
+  display: none;
+}
+
+/* driver name */
+.name {
+  padding-left: 8px;
+  font-size: 11px;
+  font-weight: 900;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.5px;
+}
+
+/* gap display */
+.right {
+  justify-self: end;
+  text-align: right;
   padding-right: 6px;
 }
-.row:hover { transform: translateY(-2px); box-shadow: 0 12px 36px rgba(0,0,0,0.6); }
-.row.selected {
-  outline: 2px solid rgba(0,200,255,0.16);
-  box-shadow: 0 16px 48px rgba(0,200,255,0.08);
-  transform: translateY(-2px);
-}
-
-/* pos */
-.pos {
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  height:100%;
-  width:46px;
-  background:#060606;
-  font-weight:900;
-  font-size:18px;
-  color:#fff;
-}
-
-/* colorbar */
-.colorbar {
-  width:8px;
-  height:28px;
-  border-radius:4px;
-  margin-left:6px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.35);
-}
-
-/* name */
-.name {
-  padding-left:10px;
-  font-size:13px;
-  font-weight:800;
-  color:#e6eef6;
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-
-/* right area */
-.right {
-  justify-self:end;
-  text-align:right;
-}
 .gap {
-  font-size:12px;
-  font-weight:800;
-  color:#bfcbd6;
+  font-size: 10px;
+  font-weight: 900;
+  color: #fff;
 }
 
 /* lapped badge */
 .lapped-badge {
-  display:inline-block;
+  display: inline-block;
   background: rgba(255, 59, 48, 0.12);
   border: 1px solid #ff3b30;
   color: #ff3b30;
@@ -125,192 +170,310 @@ body {
   vertical-align: middle;
 }
 
-/* FOCUS PANEL - bottom-right */
+/* drive type badge (in leaderboard rows) */
+.drive-badge {
+  display: inline-block;
+  background: rgba(0, 150, 200, 0.15);
+  border: 1px solid #0096c8;
+  color: #00d4ff;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+/* drive type badge in focus panel */
+.drive-type-badge {
+  display: inline-block;
+  background: #0096c8;
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 800;
+  margin-left: 6px;
+}
+
+/* ============================================ */
+/* FOCUS PANEL (BOTTOM RIGHT) */
+/* ============================================ */
+
 #focus-panel {
   position: absolute;
-  right: 28px;
-  bottom: 28px;
+  right: 20px;
+  bottom: 20px;
   pointer-events: auto;
   z-index: 40;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  background: rgba(6,6,6,0.95);
-  padding: 14px 18px;
-  border-radius: 6px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-  min-width: 320px;
+  align-items: stretch;
+  gap: 0;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+  min-width: 520px;
   opacity: 1;
   visibility: visible;
-  border: 2px solid rgba(0,200,255,0.3);
+  border: none;
+  height: 60px;
 }
 
-/* big pos box */
+/* Position number box (blue) */
 #focus-pos {
-  background: #060606;
-  width: 64px;
-  height: 56px;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  font-size:36px;
-  font-weight:900;
-  border-radius:6px;
-  color:#fff;
+  background: #2196F3;
+  width: 70px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 40px;
+  font-weight: 900;
+  border-radius: 0;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.3);
 }
 
-/* right side of focus */
-#focus-right { display:flex; flex-direction:column; gap:6px; }
-#focus-name { font-size:18px; font-weight:900; color:#dfeefc; }
-#focus-gap { font-size:12px; font-weight:800; color:#c6d3db; }
-
-/* small screens adjustments */
-@media (max-width: 900px) {
-  #board { width: 200px; left: 12px; top: 12px; gap: 8px; }
-  .row { height: 40px; grid-template-columns: 40px 8px 1fr; }
-  .pos { font-size:16px; width:40px; }
-  #lap-pill { top: 12px; padding:6px 12px; font-size:13px; }
-  #focus-panel { right: 12px; bottom: 12px; min-width: 260px; padding:10px 12px; }
-  #focus-pos { width:52px; height:44px; font-size:30px; }
-  #focus-name { font-size:16px; }
+/* Country flag section */
+#focus-flag-container {
+  width: 100px;
+  height: 60px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.3);
+}
+#focus-flag {
+  max-width: 80px;
+  max-height: 45px;
+  object-fit: contain;
 }
 
-/* ------------------------------------------------------------------
-   Additional broadcast-style blocks & large-format leaderboard/focus
-   (these were added earlier to match the reference UI; they are safe
-   to keep alongside the small overlay rules above)
-   ------------------------------------------------------------------ */
+/* Driver name section */
+#focus-middle {
+  background: #000;
+  padding: 0 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 160px;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.3);
+}
 
-/* large-style leaderboard container (optional) */
-#leaderboard {
-  position: absolute;
-  top: 40px;
-  left: 40px;
-  width: 720px;
+#focus-name { 
+  font-size: 18px; 
+  font-weight: 900; 
+  color: #fff;
+  letter-spacing: 0.5px;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Gap section */
+#focus-gap-section {
+  background: rgba(30, 30, 30, 0.95);
+  padding: 0 18px;
   display: flex;
   flex-direction: column;
-  pointer-events: auto;
-  z-index: 35;
-}
-
-/* wide leaderboard row used for broadcast layout (alternate to .row) */
-.lb-row {
-  display: grid;
-  grid-template-columns: 70px 1fr 180px;
-  height: 64px;
-  background: linear-gradient(90deg, #000, #1a1a1a);
-  margin-bottom: 6px;
-  cursor: pointer;
-  align-items: center;
-}
-.lb-row.selected { outline: 3px solid rgba(0,180,255,0.5); box-shadow: 0 12px 36px rgba(0,0,0,0.6); transform: translateY(-2px); }
-
-.lb-pos {
-  display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 34px;
+  gap: 2px;
+  min-width: 90px;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.3);
+}
+
+#focus-gap-label { 
+  font-size: 9px; 
+  font-weight: 800; 
+  color: #999;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  line-height: 1.2;
+  font-style: italic;
+}
+
+#focus-gap-value {
+  font-size: 16px;
   font-weight: 900;
-  background: black;
-  color: white;
+  color: #fff;
+  line-height: 1.2;
 }
-.lb-name {
+
+/* Tag car section - show it */
+#focus-tag-section {
+  background: #fff;
+  color: #000;
+  padding: 0 14px;
   display: flex;
-  align-items: center;
-  padding-left: 24px;
-  font-size: 26px;
-  font-weight: 800;
-  color: #e6eef6;
-}
-.lb-gap {
-  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  font-size: 26px;
-  font-weight: 900;
-  color: #ffffff;
+  gap: 2px;
+  width: 70px;
+  flex-shrink: 0;
+  box-shadow: 2px 0 8px rgba(0,0,0,0.3);
 }
 
-/* position highlight colours (broadcast) */
-.pos-purple { background:#9c27b0; color: white; }
-.pos-red    { background:#e53935; color: white; }
-.pos-green  { background:#1fd14a; color: white; }
+#focus-car-number {
+  font-size: 28px;
+  font-weight: 900;
+  line-height: 1;
+}
 
-/* center info (clock + lap) for broadcast layout */
+#focus-car-label {
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  line-height: 1;
+}
+
+/* Remove old focus-right */
+#focus-right { 
+  display: none;
+}
+
+/* ============================================ */
+/* CENTER INFO (RACE TIME & LAP) */
+/* ============================================ */
+
 #center-info {
   position: absolute;
-  top: 260px;
+  top: 460px;
   left: 50%;
   transform: translateX(-50%);
   text-align: center;
   pointer-events: none;
   z-index: 34;
-}
-#race-time,
-#lap-info {
-  background: black;
-  color: white;
-  padding: 12px 30px;
-  font-size: 34px;
-  font-weight: 900;
-  margin-bottom: 12px;
-  display: inline-block;
-}
-
-/* alternate focus bar (wide) */
-#focus-bar {
-  position: absolute;
-  bottom: 40px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: grid;
-  grid-template-columns: 80px 520px 120px;
-  height: 80px;
-  background: black;
-  color: white;
-  z-index: 36;
-  pointer-events: auto;
-}
-#focus-bar .focus-pos {
-  background: white;
-  color: black;
-  font-size: 46px;
-  font-weight: 900;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-#focus-bar .focus-main {
-  padding: 10px 18px;
-}
-#focus-bar .focus-name {
-  font-size: 30px;
-  font-weight: 900;
-}
-#focus-bar .focus-sub {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 6px;
-  font-size: 16px;
-  opacity: 0.9;
-}
-#focus-bar .focus-tag {
-  background: white;
-  color: black;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  gap: 10px;
 }
-#focus-bar .focus-tag-num { font-size: 34px; font-weight: 900; }
-#focus-bar .tag-label { font-size: 12px; font-weight: 800; }
 
-/* small responsive tweaks for broadcast blocks */
-@media (max-width: 900px) {
-  #leaderboard { left: 12px; top: 12px; width: calc(100% - 24px); }
-  .lb-row { grid-template-columns: 64px 1fr 140px; height: 56px; }
-  #center-info { top: 200px; }
-  #focus-bar { grid-template-columns: 64px 1fr 88px; height: 64px; bottom: 12px; left: 50%; transform: translateX(-50%); }
+#race-time,
+#lap-info {
+  background: #000;
+  color: #fff;
+  padding: 16px 40px;
+  font-size: 48px;
+  font-weight: 900;
+  margin-bottom: 0;
+  display: inline-block;
+  letter-spacing: 3px;
 }
+
+/* ============================================ */
+/* RESPONSIVE */
+/* ============================================ */
+
+@media (max-width: 900px) {
+  #board { 
+    width: 240px; 
+    left: 20px;
+    top: 90px; 
+    gap: 2px;
+    transform: none;
+  }
+  .row { 
+    height: 26px; 
+    grid-template-columns: 28px 1fr 70px; 
+  }
+  .pos { 
+    font-size: 12px; 
+    width: 28px; 
+  }
+  .name { 
+    font-size: 11px; 
+    padding-left: 6px; 
+  }
+  .gap { 
+    font-size: 10px; 
+  }
+  #lap-pill { 
+    top: 8px; 
+    padding: 6px 16px; 
+    font-size: 16px; 
+  }
+  #focus-panel { 
+    left: 50%;
+    bottom: 20px;
+    min-width: 480px; 
+    height: 70px; 
+  }
+  #focus-pos { 
+    width: 90px;
+    height: 70px;
+    font-size: 56px; 
+  }
+  #focus-flag-container {
+    width: 120px;
+    height: 70px;
+  }
+  #focus-flag {
+    max-width: 100px;
+    max-height: 55px;
+  }
+  #focus-middle {
+    min-width: 200px;
+    padding: 0 16px;
+  }
+  #focus-name { 
+    font-size: 24px; 
+  }
+  #focus-gap-section {
+    min-width: 100px;
+    padding: 0 16px;
+  }
+  #focus-gap-label { 
+    font-size: 12px; 
+  }
+  #focus-gap-value {
+    font-size: 22px;
+  }
+  #logo-container { 
+    top: 8px; 
+    left: 10px; 
+    padding: 6px 10px; 
+  }
+  #logo-container img { 
+    height: 40px; 
+  }
+  #info-container { 
+    top: 8px; 
+    right: 10px; 
+    padding: 6px 12px; 
+    font-size: 12px; 
+  }
+  #center-info {
+    top: 380px;
+  }
+  #race-time,
+  #lap-info {
+    padding: 12px 30px;
+    font-size: 36px;
+  }
+}
+
+
+/* hide flag area (no flags used) */
+#focus-flag-container {
+  display: none !important;
+}
+
+.pos-purple {
+  animation: pulse-purple 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-purple {
+  0%   { box-shadow: inset 0 0 0 rgba(156,39,176,0.0); }
+  50%  { box-shadow: inset 0 0 10px rgba(156,39,176,0.6); }
+  100% { box-shadow: inset 0 0 0 rgba(156,39,176,0.0); }
+}
+
 
 /* end of file */
